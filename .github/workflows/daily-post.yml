@@ -1,0 +1,51 @@
+name: 자동 발행
+
+on:
+  schedule:
+    # 매시 정각(UTC). queue.csv 의 time 열이 실제 발행 시각을 결정한다.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "실제 발행 없이 확인만"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 발행
+        env:
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_TOKEN: ${{ secrets.THREADS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GH_BRANCH: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python post.py
+
+      - name: 발행 결과 기록
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain queue.csv)" ]; then
+            git config user.name  "auto-post"
+            git config user.email "auto-post@users.noreply.github.com"
+            git add queue.csv
+            git commit -m "발행 결과 기록 $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push
+          fi

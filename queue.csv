@@ -1,0 +1,4 @@
+date,time,platform,type,files,caption,status,result
+2026-09-13,09:00,both,video,sample-reel.mp4,"오늘의 한 줄.\n\n첫 줄에 후킹, 그 다음에 본문.\n\n#해시태그 #키워드",,
+2026-09-14,09:00,both,carousel,card1.jpg;card2.jpg;card3.jpg,"카드뉴스 캡션 자리.\n\n#해시태그",,
+2026-09-15,09:00,threads,text,,"텍스트만 올릴 때는 files 비우고 platform 을 threads 로.",,

@@ -1,0 +1,42 @@
+name: 토큰 자동 갱신
+
+# 장기 토큰은 60일 만료. 매달 1일에 갱신해 만료를 막는다.
+# 사전 준비: repo 권한이 있는 개인 액세스 토큰을 GH_PAT 시크릿으로 등록
+#   GitHub → Settings → Developer settings → Personal access tokens (fine-grained)
+#   → 이 저장소 선택 → Repository permissions → Secrets: Read and write
+
+on:
+  schedule:
+    - cron: "0 18 1 * *"   # 매달 1일 03:00 KST
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - id: refresh
+        env:
+          THREADS_TOKEN: ${{ secrets.THREADS_TOKEN }}
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+        run: python refresh_token.py
+
+      - name: 시크릿 업데이트
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          NEW_THREADS: ${{ steps.refresh.outputs.THREADS_TOKEN }}
+          NEW_IG: ${{ steps.refresh.outputs.IG_TOKEN }}
+        run: |
+          if [ -n "$NEW_THREADS" ]; then
+            gh secret set THREADS_TOKEN --body "$NEW_THREADS"
+            echo "쓰레드 토큰 갱신됨"
+          fi
+          if [ -n "$NEW_IG" ]; then
+            gh secret set IG_TOKEN --body "$NEW_IG"
+            echo "인스타 토큰 갱신됨"
+          fi
