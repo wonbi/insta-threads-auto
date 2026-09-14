@@ -1,0 +1,82 @@
+name: 콘텐츠 자동 생성
+
+# 매주 새 콘텐츠를 만들어 큐에 채워 넣는다.
+# 큐가 비지 않으니 사람 손 없이 계속 발행된다.
+
+on:
+  schedule:
+    - cron: "0 2 * * 1"      # 매주 월요일 11:00 KST
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "며칠치 만들까요"
+        default: "14"
+      force:
+        description: "이미 있는 날짜도 다시 만들기"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: content-gen
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 준비
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-noto-cjk
+          pip install --quiet pillow
+
+      - name: 대본과 큐 생성
+        run: |
+          python generate_content.py \
+            --days "${{ inputs.days || 14 }}" \
+            ${{ inputs.force == 'true' && '--force' || '' }}
+
+      - name: 영상 생성
+        run: python make_reel.py
+
+      - name: 저장소에 반영
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name  "content-bot"
+            git config user.email "content-bot@users.noreply.github.com"
+            git add -A
+            git commit -m "콘텐츠 자동 생성 $(TZ=Asia/Seoul date +%Y-%m-%d)"
+            git push
+            echo "반영 완료"
+          else
+            echo "변경 없음"
+          fi
+
+      - name: 오래된 영상 정리
+        run: |
+          # 큐에 없는 mp4 는 지운다 (저장소가 계속 커지는 걸 막음)
+          python - <<'EOF'
+          import csv, os
+          used = set()
+          with open("queue.csv", encoding="utf-8-sig") as f:
+              for r in csv.DictReader(f):
+                  if r.get("files"):
+                      used.update(x.strip() for x in r["files"].split(";"))
+          removed = []
+          for n in os.listdir("media"):
+              if n.endswith(".mp4") and n not in used:
+                  os.remove(os.path.join("media", n)); removed.append(n)
+          print("정리:", removed or "없음")
+          EOF
+          if [ -n "$(git status --porcelain media)" ]; then
+            git add -A media && git commit -m "오래된 영상 정리" && git push
+          fi
