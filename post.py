@@ -205,13 +205,68 @@ def write_queue(rows):
             w.writerow({k: r.get(k, "") for k in FIELDS})
 
 
-def main():
-    today = datetime.now(KST).strftime("%Y-%m-%d")
-    now_hm = datetime.now(KST).strftime("%H:%M")
+def git_sync():
+    """queue.csv 변경분을 저장소에 즉시 반영한다 (--watch 중 중간 저장)."""
+    import subprocess
+    def run(*a):
+        return subprocess.run(a, cwd=ROOT, capture_output=True, text=True)
+    if not run("git", "status", "--porcelain", "queue.csv").stdout.strip():
+        return
+    run("git", "config", "user.name", "auto-post")
+    run("git", "config", "user.email", "auto-post@users.noreply.github.com")
+    run("git", "add", "queue.csv")
+    run("git", "commit", "-m", f"발행 결과 기록 {datetime.now(KST):%Y-%m-%d %H:%M} KST")
+    p = run("git", "push")
+    if p.returncode != 0:
+        run("git", "pull", "--rebase", "--autostash")
+        p = run("git", "push")
+    log("  큐 저장 " + ("완료" if p.returncode == 0 else "실패: " + p.stderr.strip()[:200]))
+
+
+def publish_row(rows, i):
+    r = rows[i]
+    platform = (r.get("platform") or "both").strip().lower()
+    kind = (r.get("type") or "text").strip().lower()
+    files = [x for x in (r.get("files") or "").split(";") if x.strip()]
+    caption = (r.get("caption") or "").replace("\\n", "\n").strip()
+    targets = ["threads", "instagram"] if platform == "both" else [platform]
+
+    log(f"── {i+1}행 | {platform} | {kind} | {files or '텍스트'}")
+    results, ok = [], True
+    for t in targets:
+        try:
+            if DRY_RUN:
+                for f in files:
+                    log(f"  [DRY] {media_url(f)}")
+                log(f"  [DRY] {t} 발행 예정")
+                results.append(f"{t}:DRY")
+                continue
+            mid = post_threads(kind, files, caption) if t == "threads" \
+                else post_instagram(kind, files, caption)
+            if mid:
+                log(f"  ✅ {t} 발행 완료 (id={mid})")
+                results.append(f"{t}:{mid}")
+            else:
+                results.append(f"{t}:skipped")
+        except Exception as e:
+            ok = False
+            log(f"  ❌ {t} 실패: {e}")
+            results.append(f"{t}:ERROR")
+    rows[i]["status"] = "done" if ok else "error"
+    rows[i]["result"] = " | ".join(results)
+    return ok
+
+
+def one_pass(push=False):
+    """지금 발행할 수 있는 행을 모두 발행한다.
+    반환: (발행 시도 수, 실패 수, 오늘 남은 행의 다음 예정 시각 'HH:MM' 또는 None)"""
+    now = datetime.now(KST)
+    today = now.strftime("%Y-%m-%d")
+    now_hm = now.strftime("%H:%M")
     log(f"오늘 {today} {now_hm} (KST) 발행 대상 확인")
 
     rows = read_queue()
-    todo = []
+    todo, later = [], []
     for i, r in enumerate(rows):
         if r.get("date", "").strip() != today:
             continue
@@ -219,51 +274,58 @@ def main():
             continue
         want = (r.get("time") or "00:00").strip()
         if want > now_hm:
-            log(f"  {i+1}행: 예정 시각 {want} — 아직 아님")
-            continue
-        todo.append((i, r))
+            later.append(want)
+        else:
+            todo.append(i)
 
     if not todo:
-        log("발행할 항목 없음")
-        return 0
+        log("지금 발행할 항목 없음" + (f" (다음 {min(later)})" if later else ""))
+        return 0, 0, (min(later) if later else None)
 
     failed = 0
-    for i, r in todo:
-        platform = (r.get("platform") or "both").strip().lower()
-        kind = (r.get("type") or "text").strip().lower()
-        files = [x for x in (r.get("files") or "").split(";") if x.strip()]
-        caption = (r.get("caption") or "").replace("\\n", "\n").strip()
-        targets = ["threads", "instagram"] if platform == "both" else [platform]
+    for i in todo:
+        if not publish_row(rows, i):
+            failed += 1
+        # 한 행 끝날 때마다 바로 기록한다.
+        # (실행이 중간에 끊겨도 같은 글이 두 번 올라가지 않게)
+        if not DRY_RUN:
+            write_queue(rows)
+            if push:
+                git_sync()
+    return len(todo), failed, (min(later) if later else None)
 
-        log(f"── {i+1}행 | {platform} | {kind} | {files or '텍스트'}")
-        results = []
-        ok = True
-        for t in targets:
-            try:
-                if DRY_RUN:
-                    for f in files:
-                        log(f"  [DRY] {media_url(f)}")
-                    log(f"  [DRY] {t} 발행 예정")
-                    results.append(f"{t}:DRY")
-                    continue
-                mid = post_threads(kind, files, caption) if t == "threads" \
-                    else post_instagram(kind, files, caption)
-                if mid:
-                    log(f"  ✅ {t} 발행 완료 (id={mid})")
-                    results.append(f"{t}:{mid}")
-                else:
-                    results.append(f"{t}:skipped")
-            except Exception as e:
-                ok = False
-                failed += 1
-                log(f"  ❌ {t} 실패: {e}")
-                results.append(f"{t}:ERROR")
 
-        rows[i]["status"] = "done" if ok else "error"
-        rows[i]["result"] = " | ".join(results)
+def watch():
+    """한 번 깨어난 김에 오늘 남은 슬롯까지 지키고 있다가 제때 발행한다.
 
-    if not DRY_RUN:
-        write_queue(rows)
+    GitHub 의 schedule 은 최대 몇 시간씩 밀리기 때문에, 실행될 때마다
+    오늘 치가 끝날 때까지 살아 있는 편이 훨씬 정확하다."""
+    deadline = datetime.now(KST) + timedelta(hours=5, minutes=20)
+    failed_total = 0
+    while True:
+        _, failed, nxt = one_pass(push=True)
+        failed_total += failed
+        if nxt is None:
+            log("오늘 치 발행 완료 — 종료")
+            break
+        now = datetime.now(KST)
+        h, m = (int(x) for x in nxt.split(":"))
+        target = now.replace(hour=h, minute=m, second=5, microsecond=0)
+        if target <= now:
+            target = now + timedelta(minutes=1)
+        if target > deadline:
+            log(f"다음 예정 {nxt} — 이 실행의 한계 시간을 넘어 종료 (다음 실행이 이어받음)")
+            break
+        wait = (target - now).total_seconds()
+        log(f"다음 예정 {nxt} — {int(wait//60)}분 대기")
+        time.sleep(wait)
+    return 1 if failed_total else 0
+
+
+def main():
+    if "--watch" in sys.argv:
+        return watch()
+    _, failed, _ = one_pass()
     return 1 if failed else 0
 
 

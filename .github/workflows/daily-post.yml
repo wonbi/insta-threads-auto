@@ -2,8 +2,14 @@ name: 자동 발행
 
 on:
   schedule:
-    # 매시 정각(UTC). queue.csv 의 time 열이 실제 발행 시각을 결정한다.
-    - cron: "0 * * * *"
+    # GitHub 의 schedule 은 자주 밀린다(실측 2~5시간).
+    # 그래서 자주 호출해 두고, 한 번 깨어나면 post.py --watch 가
+    # 오늘 치 슬롯을 끝까지 지키고 있다가 제때 발행한다.
+    - cron: "*/20 * * * *"
+  push:
+    # 손으로 올릴 때(업로드 스크립트 등)는 기다리지 않고 바로 발행한다.
+    branches: [main]
+    paths: ["queue.csv", "media/**", "post.py"]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -16,11 +22,12 @@ permissions:
 
 concurrency:
   group: auto-post
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   post:
     runs-on: ubuntu-latest
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
 
@@ -37,7 +44,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_BRANCH: ${{ github.ref_name }}
           DRY_RUN: ${{ inputs.dry_run }}
-        run: python post.py
+        run: python post.py --watch
 
       - name: 발행 결과 기록
         if: always()
@@ -46,6 +53,7 @@ jobs:
             git config user.name  "auto-post"
             git config user.email "auto-post@users.noreply.github.com"
             git add queue.csv
-            git commit -m "발행 결과 기록 $(date -u +%Y-%m-%dT%H:%MZ)"
+            git commit -m "발행 결과 기록 $(TZ=Asia/Seoul date +%Y-%m-%d\ %H:%M)"
+            git pull --rebase --autostash || true
             git push
           fi
