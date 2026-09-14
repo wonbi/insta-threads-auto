@@ -48,6 +48,7 @@ def main():
     if gh_out:
         with open(gh_out, "a", encoding="utf-8") as f:
             for k, v in out.items():
+                print(f"::add-mask::{v}")      # 로그에 토큰이 찍히지 않게
                 f.write(f"{k}={v}\n")
     else:
         print(json.dumps(out, indent=2, ensure_ascii=False))

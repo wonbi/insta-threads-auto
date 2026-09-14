@@ -24,7 +24,7 @@ jobs:
         env:
           THREADS_TOKEN: ${{ secrets.THREADS_TOKEN }}
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
-        run: python scripts/refresh_token.py
+        run: python refresh_token.py
 
       - name: 시크릿 업데이트
         env:
