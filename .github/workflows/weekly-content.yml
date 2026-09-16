@@ -10,7 +10,7 @@ on:
     inputs:
       days:
         description: "며칠치 만들까요"
-        default: "14"
+        default: "28"
       force:
         description: "이미 있는 날짜도 다시 만들기"
         type: boolean
@@ -42,8 +42,8 @@ jobs:
       - name: 대본과 큐 생성
         run: |
           python generate_content.py \
-            --days "${{ inputs.days || 14 }}" \
-            ${{ inputs.force == 'true' && '--force' || '' }}
+            --days "${{ inputs.days || 28 }}" \
+            ${{ inputs.force && '--force' || '' }}
 
       - name: 영상 생성
         run: python make_reel.py

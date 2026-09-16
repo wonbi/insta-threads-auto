@@ -27,8 +27,19 @@ KST = datetime.timezone(datetime.timedelta(hours=9))
 FIELDS = ["date", "time", "platform", "type", "files", "caption", "status", "result"]
 
 CTA_REEL = "공구·셀러 문의 → 프로필 링크"
-CTA_THREAD = "공구·셀러 문의는 프로필 링크로."
-CTA_IG = "공구·셀러 문의 → 프로필 링크"
+CTA_IG = ("위탁이라 재고 부담 없고 공급가도 저렴합니다.\n"
+          "최소 수량이랑 공급가는 프로필 링크로 문의 주세요.")
+CTA_IG_SHORT = "최소 수량이랑 공급가는 프로필 링크로 문의 주세요."
+
+# 인스타 캡션에 붙는 '셀러 입장' 한 줄 — 영상은 제품, 캡션은 장사 얘기
+SELLER_LINES = [
+    "매일 쓰고 다 쓰면 다시 사는 물건입니다. 한 번 팔고 끝나지 않아요.",
+    "설명이 길게 필요 없어서 공구에서 전환이 빠릅니다.",
+    "싱크대 앞에서 같이 쓰이는 것들이라 묶으면 장바구니가 커집니다.",
+    "소비 속도가 빨라서 재주문 주기가 짧습니다.",
+    "써 보면 바로 아는 차이라 후기가 잘 붙습니다.",
+    "계절을 안 타서 일 년 내내 돌릴 수 있습니다.",
+]
 TAGS = ("#공동구매 #공구셀러 #위탁판매 #생활용품도매 #국내산 "
         "#스마트스토어 #폐쇄몰 #셀러모집 #찐한국")
 
@@ -67,6 +78,18 @@ def pick(seq, rng, used):
     return chosen
 
 
+def ig_caption(fact, rng, used_sell):
+    """영상은 제품을 보여주고, 캡션은 '이걸 팔면 어떻게 되는지'를 말한다."""
+    parts = [fact["ig"]]
+    if fact["product"] == "거래조건":          # 이미 셀러 얘기라 덧붙이지 않는다
+        parts.append(CTA_IG_SHORT)
+    else:
+        parts.append(pick(SELLER_LINES, rng, used_sell))
+        parts.append(CTA_IG)
+    parts.append(TAGS)
+    return "\n\n".join(parts)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=14)
@@ -76,6 +99,7 @@ def main():
     data = load("facts.json")
     facts = data["facts"]
     cta_cards = data["cta_cards"]
+    posts = load("threads.json")          # 쓰레드용 긴 글
 
     rows = read_queue()
     have = {r["date"] for r in rows if r.get("date")}
@@ -100,9 +124,11 @@ def main():
     rng = random.Random(targets[0].toordinal())
     order = list(range(len(facts)))
     rng.shuffle(order)
+    porder = list(range(len(posts)))
+    rng.shuffle(porder)
 
     reels, new_rows = [], []
-    used_cta = []
+    used_cta, used_sell = [], []
 
     for i, day in enumerate(targets):
         fact = facts[order[i % len(facts)]]
@@ -119,18 +145,27 @@ def main():
         cards.append({**c, "img": imgs[2], "cta": CTA_REEL})
         reels.append({"id": rid, "hold": 3.4, "cards": cards})
 
+        # 쓰레드 긴 글 2편 — 같은 날 같은 품목이 겹치지 않게 고른다
+        a = posts[porder[(i * 2) % len(posts)]]
+        b = posts[porder[(i * 2 + 1) % len(posts)]]
+        if a["product"] == b["product"]:
+            for step in range(2, len(posts)):
+                alt = posts[porder[(i * 2 + step) % len(posts)]]
+                if alt["product"] != a["product"]:
+                    b = alt
+                    break
+
         day_s = day.isoformat()
-        th = fact["th"]
         new_rows += [
             {"date": day_s, "time": TIMES["threads_1"], "platform": "threads",
-             "type": "text", "files": "",
-             "caption": (th[0] + "\n\n" + CTA_THREAD).replace("\n", "\\n")},
+             "type": "image" if a.get("img") else "text", "files": a.get("img", ""),
+             "caption": a["text"].replace("\n", "\\n")},
             {"date": day_s, "time": TIMES["instagram"], "platform": "instagram",
              "type": "video", "files": rid + ".mp4",
-             "caption": (fact["ig"] + "\n\n" + CTA_IG + "\n\n" + TAGS).replace("\n", "\\n")},
+             "caption": ig_caption(fact, rng, used_sell).replace("\n", "\\n")},
             {"date": day_s, "time": TIMES["threads_2"], "platform": "threads",
-             "type": "text", "files": "",
-             "caption": (th[1] + "\n\n" + CTA_THREAD).replace("\n", "\\n")},
+             "type": "image" if b.get("img") else "text", "files": b.get("img", ""),
+             "caption": b["text"].replace("\n", "\\n")},
         ]
 
     with open(os.path.join(ROOT, "reels.json"), "w", encoding="utf-8") as f:
