@@ -20,6 +20,7 @@ reels.json 에 적힌 대본을 읽어 1080x1920 MP4 를 media/ 에 만든다.
 ]
 """
 
+import glob
 import json
 import os
 import shutil
@@ -44,16 +45,53 @@ GREY = (122, 132, 140)
 POINT = (205, 133, 42)          # 강조 키워드
 LINE = (216, 221, 224)
 
-FONT_DIR = "/usr/share/fonts/opentype/noto"
-KR = 1  # Noto Sans CJK KR
+KR = 1  # Noto Sans CJK 안에서 한국어 face 번호
+
+# 한글 폰트 경로는 환경마다 다르다(깃허브 러너 업데이트로 바뀐 적 있음).
+# 고정 경로 대신 찾아서 쓰고, 굵기가 없으면 가까운 굵기로 대체한다.
+_FONT_DIRS = ["/usr/share/fonts", "/usr/local/share/fonts",
+              os.path.expanduser("~/.fonts")]
+_FALLBACK = {
+    "black":   ["NotoSansCJK-Black", "NotoSansCJKkr-Black", "NotoSansKR-Black",
+                "NotoSansCJK-Bold", "NotoSansCJK-Regular"],
+    "bold":    ["NotoSansCJK-Bold", "NotoSansCJKkr-Bold", "NotoSansKR-Bold",
+                "NotoSansCJK-Black", "NotoSansCJK-Regular"],
+    "medium":  ["NotoSansCJK-Medium", "NotoSansCJKkr-Medium", "NotoSansKR-Medium",
+                "NotoSansCJK-Regular"],
+    "regular": ["NotoSansCJK-Regular", "NotoSansCJKkr-Regular", "NotoSansKR-Regular",
+                "NotoSansCJK-Medium"],
+}
+_resolved = {}
+
+
+def _find_font(weight):
+    if weight in _resolved:
+        return _resolved[weight]
+    for stem in _FALLBACK[weight]:
+        for d in _FONT_DIRS:
+            for ext in (".ttc", ".otf", ".ttf"):
+                hits = glob.glob(os.path.join(d, "**", stem + ext), recursive=True)
+                if hits:
+                    _resolved[weight] = sorted(hits)[0]
+                    return _resolved[weight]
+    # 마지막 수단 — 이름이 뭐든 CJK 폰트 아무거나
+    for d in _FONT_DIRS:
+        hits = [h for h in glob.glob(os.path.join(d, "**", "*CJK*"), recursive=True)
+                if h.endswith((".ttc", ".otf", ".ttf"))]
+        if hits:
+            _resolved[weight] = sorted(hits)[0]
+            return _resolved[weight]
+    raise RuntimeError(
+        "한글 폰트를 찾을 수 없습니다. fonts-noto-cjk 를 설치하세요.")
 
 
 def font(weight, size):
-    f = {"black": "NotoSansCJK-Black.ttc",
-         "bold": "NotoSansCJK-Bold.ttc",
-         "medium": "NotoSansCJK-Medium.ttc",
-         "regular": "NotoSansCJK-Regular.ttc"}[weight]
-    return ImageFont.truetype(os.path.join(FONT_DIR, f), size, index=KR)
+    path = _find_font(weight)
+    try:
+        return ImageFont.truetype(path, size, index=KR)
+    except Exception:
+        # face 가 하나뿐인 파일(.otf 등)은 index 0
+        return ImageFont.truetype(path, size, index=0)
 
 
 def text_size(draw, s, fnt, spacing=0):
