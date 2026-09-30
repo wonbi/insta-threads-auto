@@ -58,6 +58,8 @@ def http(url, params=None, method="GET"):
 
 def media_url(filename):
     """media/ 파일의 공개 CDN URL."""
+    if filename.strip().startswith(("http://", "https://")):   # 토스 상품 이미지처럼 이미 공개 URL
+        return filename.strip()
     repo = os.environ["GH_REPO"].strip()
     branch = os.environ.get("GH_BRANCH", "main").strip()
     name = urllib.parse.quote(filename.strip())
@@ -132,6 +134,15 @@ def post_threads(kind, files, caption):
     return r["id"]
 
 
+def comment_threads(post_id, text):
+    """방금 올린 글에 첫 댓글(답글)을 단다. 제휴 링크는 여기에 넣는다."""
+    cid = threads_container({"media_type": "TEXT", "text": text, "reply_to_id": post_id})
+    wait_ready(lambda: threads_status(cid), "쓰레드 댓글")
+    uid = os.environ["THREADS_USER_ID"]
+    return http(f"{THREADS_API}/{uid}/threads_publish",
+                {"creation_id": cid, "access_token": os.environ["THREADS_TOKEN"]}, "POST")["id"]
+
+
 # ---------------------------------------------------------------- Instagram
 
 def ig_container(params):
@@ -187,9 +198,15 @@ def post_instagram(kind, files, caption):
     return r["id"]
 
 
+def comment_instagram(media_id, text):
+    """방금 올린 게시물에 첫 댓글을 단다."""
+    return http(f"{IG_API}/{media_id}/comments",
+                {"message": text, "access_token": os.environ["IG_TOKEN"]}, "POST")["id"]
+
+
 # ---------------------------------------------------------------- 큐 처리
 
-FIELDS = ["date", "time", "platform", "type", "files", "caption", "status", "result"]
+FIELDS = ["date", "time", "platform", "type", "files", "caption", "status", "result", "comment"]
 
 
 def read_queue():
@@ -229,6 +246,7 @@ def publish_row(rows, i):
     kind = (r.get("type") or "text").strip().lower()
     files = [x for x in (r.get("files") or "").split(";") if x.strip()]
     caption = (r.get("caption") or "").replace("\\n", "\n").strip()
+    comment = (r.get("comment") or "").replace("\\n", "\n").strip()
     targets = ["threads", "instagram"] if platform == "both" else [platform]
 
     log(f"── {i+1}행 | {platform} | {kind} | {files or '텍스트'}")
@@ -246,6 +264,15 @@ def publish_row(rows, i):
             if mid:
                 log(f"  ✅ {t} 발행 완료 (id={mid})")
                 results.append(f"{t}:{mid}")
+                if comment:   # 댓글 실패는 글 발행 성공에 영향을 주지 않는다
+                    try:
+                        time.sleep(3)
+                        cm = comment_threads(mid, comment) if t == "threads" \
+                            else comment_instagram(mid, comment)
+                        log(f"  💬 {t} 댓글 완료 (id={cm})")
+                    except Exception as e:
+                        log(f"  ⚠️ {t} 댓글 실패(글은 발행됨): {e}")
+                        results.append(f"{t}-comment:ERROR")
             else:
                 results.append(f"{t}:skipped")
         except Exception as e:
